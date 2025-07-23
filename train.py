@@ -95,6 +95,8 @@ def main(config):
     # training loop
     for e in range(num_epochs):
         for imgs in dataloader:
+            # FIXME(diego): need to unpack dict?
+            imgs = imgs['target']
             if training_steps >= config.train.num_steps:
                 break
             optimizer.zero_grad()

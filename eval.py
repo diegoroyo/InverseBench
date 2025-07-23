@@ -8,7 +8,7 @@ import torch
 import numpy as np
 from piq import LPIPS, psnr, ssim
 from collections import defaultdict
-from training.loss import DynamicRangePSNRLoss, DynamicRangeSSIMLoss
+from training.loss import DynamicRangePSNRLoss, DynamicRangeSSIMLoss, RelativePowerSpectrumSimilarityLoss
 
 
 class Evaluator(ABC):
@@ -62,6 +62,41 @@ class Evaluator(ABC):
             metric_state[f'{key}_std'] = np.std(val)
         return metric_state
 
+
+class GravLensingEvaluator(Evaluator):
+    def __init__(self, forward_op=None):
+        rpss_loss = RelativePowerSpectrumSimilarityLoss()
+        metric_list = {
+            'psnr': lambda p, t: psnr(p.clip(-1, 1) + 1, t.clip(-1, 1) + 1, data_range=2.0),
+            'ssim': lambda p, t: ssim(p.clip(-1, 1) + 1, t.clip(-1, 1) + 1, data_range=2.0),
+            'mse': lambda p, t: torch.mean((p - t) ** 2),
+            'rpss': rpss_loss,
+        }
+        super(GravLensingEvaluator, self).__init__(
+            metric_list, forward_op=forward_op)
+        self.metric_state = defaultdict(list)
+
+    def __call__(self, pred, target, observation=None):
+        '''
+        Args:
+            - pred (torch.Tensor): (N, C, H, W)
+            - target (torch.Tensor): (C, H, W) or (N, C, H, W)
+        Returns:
+            - metric_dict (Dict): a dictionary of metric values
+        '''
+        pred, target, observation = pred.to(self.device), target.to(
+            self.device), observation.to(self.device)
+        
+        if target.ndim == 3:
+            target = target.unsqueeze(0)
+
+        metric_dict = {}
+        for metric_name, metric_func in self.metric_list.items():
+            val = metric_func(pred[:, 0:1, ...], target[:, 0:1, ...]).item()
+            metric_dict[metric_name] = val
+            self.metric_state[metric_name].append(val)
+        return metric_dict
+        
 
 class BlackHoleEvaluator(Evaluator):
     def __init__(self, 
