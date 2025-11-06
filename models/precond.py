@@ -19,6 +19,7 @@ class VPPrecond(torch.nn.Module):
     def __init__(self,
         img_resolution,                 # Image resolution.
         img_channels,                   # Number of color channels.
+        conditioning_channels = 0,      # Number of conditioning channels.
         label_dim       = 0,            # Number of class labels, 0 = unconditional.
         use_fp16        = False,        # Execute the underlying model at FP16 precision?
         beta_d          = 19.9,         # Extent of the noise level schedule.
@@ -39,7 +40,7 @@ class VPPrecond(torch.nn.Module):
         self.epsilon_t = epsilon_t
         self.sigma_min = float(self.sigma(epsilon_t))
         self.sigma_max = float(self.sigma(1))
-        self.model = _model_dict[model_type](img_resolution=img_resolution, in_channels=img_channels, out_channels=img_channels, label_dim=label_dim, **model_kwargs)
+        self.model = _model_dict[model_type](img_resolution=img_resolution, in_channels=img_channels + conditioning_channels, out_channels=img_channels, label_dim=label_dim, **model_kwargs)
 
     def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
         x = x.to(torch.float32)

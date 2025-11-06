@@ -15,6 +15,119 @@ from pathlib import Path
 from PIL import Image
 
 
+class GravLensingDataset(Dataset):
+    def __init__(self, root_convergence, root_photometry=None, resolution=512, original_resolution=512,
+                 compute_strong_lenses=False,
+                 random_flip=True, zoom_in_out=True, zoom_range=[1, 1.145], id_list=None):
+        super().__init__()
+
+        self.root = root_convergence
+        self.data = self.normalize_convergence(
+            np.load(root_convergence).astype(np.float32))
+        self.n_channels = 1
+        self.compute_strong_lenses = compute_strong_lenses
+        if compute_strong_lenses:
+            from inverse_problems.grav_lensing import StrongOnlyGravLensing
+            self.fwd = StrongOnlyGravLensing()
+        if root_photometry is not None:
+            self.n_channels += 1
+            self.data = np.stack([
+                self.data,
+                self.normalize_photometry(
+                    np.load(root_photometry).astype(np.float32))
+            ], axis=1)
+
+        self.resolution = resolution
+        self.original_resolution = original_resolution
+        self.length = self.data.shape[0]
+        self.random_flip = random_flip
+        self.zoom_in_out = zoom_in_out
+        self.zoom_range = zoom_range
+
+        self.id_list = id_list
+        if id_list is not None:
+            id_list = parse_int_list(id_list)
+            self.length = len(id_list)
+            self.idx_map = lambda x: id_list[x]
+            self.id_list = id_list
+
+    def normalize_convergence(self, data):
+        raise NotImplementedError(
+            'Dataset must implement normalize_convergence method.')
+
+    def normalize_photometry(self, data):
+        raise NotImplementedError(
+            'Dataset must implement normalize_photometry method.')
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        if self.id_list is None:
+            img = np.copy(self.data[idx])
+        else:
+            img = np.copy(self.data[self.idx_map(idx)])
+        img = img.reshape(self.n_channels,
+                          self.original_resolution,
+                          self.original_resolution)
+        img = torch.from_numpy(img)
+
+        if self.zoom_in_out:
+            scale = np.random.uniform(self.zoom_range[0], self.zoom_range[1])
+            zoom_shape = [
+                int(self.resolution * scale),
+                int(self.resolution * scale)
+            ]
+            img = TF.resize(img, zoom_shape, antialias=True)
+            if zoom_shape[0] > self.resolution:
+                img = TF.center_crop(img, self.resolution)
+            elif zoom_shape[0] < self.resolution:
+                diff = self.resolution - zoom_shape[0]
+                img = TF.pad(
+                    img,
+                    (diff // 2 + diff % 2, diff // 2 + diff %
+                     2, diff // 2, diff // 2)
+                )
+        else:
+            img = TF.resize(
+                img, (self.resolution, self.resolution), antialias=True)
+
+        if self.random_flip and np.random.rand() < 0.5:
+            img = torch.flip(img, [2])  # left-right flip
+        if self.random_flip and np.random.rand() < 0.5:
+            img = torch.flip(img, [1])  # top-down flip
+
+        if hasattr(self, 'compute_strong_lenses') and self.compute_strong_lenses:
+            # NOTE(diego): see StrongOnlyGravLensing (inverse_problems/grav_lensing.py)
+            # this is a hacky way to give multiple image data to it
+            import matplotlib.pyplot as plt
+            img_unnorm = self.fwd.unnormalize_convergence(torch.clone(img[0]))
+            print('Start computing strong lenses for image index:', idx)
+            result = self.fwd.compute_strong_lenses(
+                img_unnorm, verbose=True, plot=False, force_write=True)
+            print(
+                f'got {len(result)} sources with {list(len(lensed) for _, lensed in result)} images each for image index {idx}')
+            print('Finished computing strong lenses for image index:', idx)
+
+        if self.n_channels == 1:
+            return {'target': img}
+        else:
+            return {
+                'target': img[0:1],
+                'conditioning': img[1:]
+            }
+
+
+class TNGv5(GravLensingDataset):
+    def normalize_convergence(self, data):
+        data = (np.log(data + 5e-3) + 5.3) / 7.25
+        return data
+
+    def normalize_photometry(self, data):
+        data = (np.log(data + 1e-9) + 20.75) / 11.75
+        return data
+
+
 class ImageFolder(Dataset):
     def __init__(self, root, 
                  id_list=None,           # string, e.g., '0-9,2-5'

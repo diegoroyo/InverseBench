@@ -10,7 +10,7 @@ import numpy as np
 # -----------------------------------------------------------------------------------------------
 
 
-class DPS(Algo):
+class DPSAdam(Algo):
     
     '''
     DPS algorithm implemented in EDM framework.
@@ -22,7 +22,7 @@ class DPS(Algo):
                  diffusion_scheduler_config,
                  guidance_scale,
                  sde=True):
-        super(DPS, self).__init__(net, forward_op)
+        super(DPSAdam, self).__init__(net, forward_op)
         self.scale = guidance_scale
         self.diffusion_scheduler_config = diffusion_scheduler_config
         self.scheduler = Scheduler(**diffusion_scheduler_config)
@@ -33,29 +33,41 @@ class DPS(Algo):
         if num_samples > 1:
             observation = observation.repeat(num_samples, 1, 1, 1)
         x_initial = torch.randn(num_samples, self.net.img_channels, self.net.img_resolution, self.net.img_resolution, device=device) * self.scheduler.sigma_max
-        x_next = x_initial
-        x_next.requires_grad = True
+        
+        x_cur = x_initial
+        x_cur.requires_grad = True
+        optimizer = torch.optim.Adam([x_cur], lr=self.scale)
 
         pbar = tqdm(range(self.scheduler.num_steps))
         
         for i in pbar:
-            x_cur = x_next.detach().requires_grad_(True)
+            # lr_scale = 1 if i > 300 else (i / 300) ** 2
+            # for g in optimizer.param_groups:
+            #     g['lr'] = self.scale * lr_scale
+            optimizer.zero_grad()
 
             sigma, factor, scaling_factor = self.scheduler.sigma_steps[i], self.scheduler.factor_steps[i], self.scheduler.scaling_factor[i]
-            
+
             denoised = self.net(x_cur / self.scheduler.scaling_steps[i], torch.as_tensor(sigma).to(x_cur.device), conditioning=conditioning)
-            gradient, loss_scale = self.forward_op.gradient(denoised, observation, conditioning=conditioning, i=i, return_loss=True)
+            denoised_scale = 1 if i > 300 else (i / 300) ** 2
+            denoised = denoised * denoised_scale
+            # denoised = torch.clamp(denoised, 0.0, 1.0) * denoised_scale
 
-            ll_grad = torch.autograd.grad(denoised, x_cur, gradient)[0]
-            ll_grad = ll_grad * 0.5 / torch.sqrt(loss_scale)
+            loss = self.forward_op.loss(denoised, observation, conditioning=conditioning, i=i).sum()
+            loss_tv = 1e3 * torch.mean(torch.sqrt((x_cur[:,:,:-1,1:]-x_cur[:,:,:-1,:-1])**2 + (x_cur[:,:,1:,:-1]-x_cur[:,:,:-1,:-1])**2 + 1e-3))
 
-            score = (denoised - x_cur / self.scheduler.scaling_steps[i]) / sigma ** 2 / self.scheduler.scaling_steps[i]
-            pbar.set_description(f'Iteration {i + 1}/{self.scheduler.num_steps}. Data fitting loss: {torch.sqrt(loss_scale)}')
-            
-            if self.sde:
-                epsilon = torch.randn_like(x_cur)
-                x_next = x_cur * scaling_factor + factor * score + np.sqrt(factor) * epsilon
-            else:
-                x_next = x_cur * scaling_factor + factor * score * 0.5 
-            x_next -= ll_grad * self.scale
-        return x_next
+            loss += loss_tv
+            loss.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                score = (denoised - x_cur / self.scheduler.scaling_steps[i]) / sigma ** 2 / self.scheduler.scaling_steps[i]
+                
+                if self.sde:
+                    epsilon = torch.randn_like(x_cur)
+                    x_cur = x_cur * scaling_factor + factor * score + np.sqrt(factor) * epsilon
+                else:
+                    x_cur = x_cur * scaling_factor + factor * score * 0.5 
+
+            pbar.set_description(f'Iteration {i + 1}/{self.scheduler.num_steps}. Data fitting loss: {loss.item():.3e}')
+        return x_cur

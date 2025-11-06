@@ -93,11 +93,14 @@ def main(config):
     training_steps = start_steps
     # training loop
     for e in range(num_epochs):
-        for imgs in dataloader:
+        for sample in dataloader:
+            # FIXME(diego): need to unpack dict?
+            imgs = sample['target']
+            conditioning = sample.get('conditioning', None)
             if training_steps >= config.train.num_steps:
                 break
             optimizer.zero_grad()
-            loss = loss_fn(net, imgs)
+            loss = loss_fn(net, imgs, conditioning=conditioning)
             loss = torch.mean(loss)
             accelerator.backward(loss)
             if accelerator.sync_gradients and config.train.grad_clip > 0.0:
