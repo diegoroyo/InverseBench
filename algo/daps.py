@@ -32,7 +32,7 @@ class LangevinDynamics:
         self.tau = tau
         self.lr_min_ratio = lr_min_ratio
 
-    def sample(self, x0hat, operator, measurement, sigma, ratio, verbose=False):
+    def sample(self, x0hat, operator, measurement, sigma, ratio, verbose=False, conditioning=None):
         """
             Samples using Langevin dynamics.
 
@@ -56,7 +56,7 @@ class LangevinDynamics:
         for _ in pbar:
             optimizer.zero_grad()
 
-            gradient = operator.gradient(x, measurement) / (2 * self.tau ** 2)
+            gradient = operator.gradient(x, measurement, conditioning=conditioning) / (2 * self.tau ** 2)
             gradient += (x - x0hat) / sigma ** 2
             x.grad = gradient
 
@@ -105,7 +105,7 @@ class DAPS(Algo):
         self.lgvd = LangevinDynamics(**lgvd_config)
 
     
-    def inference(self, observation, num_samples=1, verbose=True):
+    def inference(self, observation, num_samples=1, verbose=True, conditioning=None):
         """
             Samples using the DAPS method.
 
@@ -121,6 +121,8 @@ class DAPS(Algo):
             Returns:
                 torch.Tensor: The final sampled state.
         """
+        # if conditioning is not None:
+        #     raise NotImplementedError("Conditioning NYI")
         if num_samples > 1:
             observation = observation.repeat(num_samples, 1, 1, 1)
         device = self.forward_op.device
@@ -134,7 +136,7 @@ class DAPS(Algo):
             x0hat = sampler.sample(self.net, xt, SDE=False, verbose=False)
 
             # 2. langevin dynamics
-            x0y = self.lgvd.sample(x0hat, self.forward_op, observation, sigma, step / self.annealing_scheduler.num_steps)
+            x0y = self.lgvd.sample(x0hat, self.forward_op, observation, sigma, step / self.annealing_scheduler.num_steps, conditioning=conditioning)
 
             # 3. forward diffusion
             xt = x0y + torch.randn_like(x0y) * self.annealing_scheduler.sigma_steps[step + 1]

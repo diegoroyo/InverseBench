@@ -1,0 +1,27 @@
+program: main.py
+project: GL
+name: grav-lensing-full
+method: bayes
+metric:
+  goal: maximize
+  name: shear_psnr
+
+parameters:
+  algorithm.method.lgvd_config.lr:
+    distribution: log_uniform_values
+    max: 0.001     #1e-3
+    min: 0.0000001 #1e-7
+
+  algorithm.method.lgvd_config.tau:
+    distribution: log_uniform_values
+    max: 0.01    #1e-2
+    min: 0.00001 #1e-5
+
+command:
+  - python
+  - ${program}
+  - problem=grav-lensing-strong-tngv5aug-hera
+  - algorithm=daps
+  - pretrain=grav-lensing-tngv5aug-fov225
+  - wandb=True
+  - ${args_no_hyphens}

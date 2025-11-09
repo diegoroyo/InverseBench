@@ -536,6 +536,8 @@ class StrongOnlyGravLensing(BaseOperator):
         self.lambda_geo = 1e-2
         self.lambda_img = 1e-3
 
+        self.ll_ref = torch.load('/home/droyo/code-darkmatter/_debug/current_ll_ref.pt')
+
         if strong_lenses_file is not None:
             self.strong_lenses = self.get_strong_lenses(strong_lenses_file)
         else:
@@ -640,11 +642,10 @@ class StrongOnlyGravLensing(BaseOperator):
                 
                 with torch.no_grad():
                     mask = torch.zeros(img_unnorm.shape, dtype=torch.bool, device=self.device)
-                    s = 2.5
+                    s = 0.5
                     for lx, ly in images:
                         mask[(X - lx) ** 2 + (Y - ly) ** 2 <= s ** 2] = 1
 
-                    """ NOTE: using plain ones image instead of photometry for now"""
                     reference_img = torch.clone(photometry).detach()
                     reference_img[~mask] = 0.0
                     reference_img = reference_img * 10.0 / reference_img.max()
@@ -675,7 +676,21 @@ class StrongOnlyGravLensing(BaseOperator):
         Returns:
             - loss (torch.tensor): loss value, shape (batch_size, )
         """
+        return ((self.ll_ref.unsqueeze(0).unsqueeze(0) - pred) ** 2).flatten(start_dim=1).mean(dim=1)
         return (self.forward(pred, **kwargs)).flatten(start_dim=1).sum(dim=1)
+
+
+    # def loss(self, pred, observation, **kwargs):
+    #     """
+    #         data consistency loss between prediction and given observation
+    #         default as L2 loss (summation over batches)
+    #     Args:
+    #         - pred (torch.tensor): predicted parameters (not measurement), shape (batch_size, ...)
+    #         - observation (torch.tensor): observed data, shape (1, ...)
+    #     Returns:
+    #         - loss (torch.tensor): loss value, shape (batch_size, )
+    #     """
+    #     return (self.forward(pred, **kwargs)).flatten(start_dim=1).sum(dim=1)
     
 
 class WeakAndStrongGravLensing(BaseOperator):

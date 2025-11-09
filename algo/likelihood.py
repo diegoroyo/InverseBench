@@ -25,7 +25,7 @@ class Likelihood(Algo):
         device = self.forward_op.device
         if num_samples > 1:
             observation = observation.repeat(num_samples, 1, 1, 1)
-        x_next = torch.randn(
+        x_next = torch.zeros(
             num_samples,
             self.net.img_channels,
             self.net.img_resolution, self.net.img_resolution,
