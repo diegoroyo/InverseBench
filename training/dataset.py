@@ -22,24 +22,27 @@ class GravLensingDataset(Dataset):
         super().__init__()
 
         self.root = root_convergence
-        self.data = self.normalize_convergence(
-            np.load(root_convergence).astype(np.float32))
+        self.data_convergence = np.load(root_convergence, mmap_mode='r')
+        # self.data = self.data[:, np.newaxis, :, :]  # add channel dim
         self.n_channels = 1
         self.compute_strong_lenses = compute_strong_lenses
+        assert not compute_strong_lenses, 'Deprecated'
         if compute_strong_lenses:
             from inverse_problems.grav_lensing import StrongOnlyGravLensing
             self.fwd = StrongOnlyGravLensing()
         if root_photometry is not None:
-            self.n_channels += 1
-            self.data = np.stack([
-                self.data,
-                self.normalize_photometry(
-                    np.load(root_photometry).astype(np.float32))
-            ], axis=1)
+            self.n_channels += 3
+            self.data_photometry = np.load(root_photometry, mmap_mode='r')
+            assert self.data_photometry.shape[0] == self.data_convergence.shape[0], \
+                'Convergence and photometry datasets must have the same number of samples.'
+            # self.data = np.concatenate([
+            #     self.data,
+            #     self.normalize_photometry(self.data_photometry)
+            # ], axis=1)
 
         self.resolution = resolution
         self.original_resolution = original_resolution
-        self.length = self.data.shape[0]
+        self.length = self.data_convergence.shape[0]
         self.random_flip = random_flip
         self.zoom_in_out = zoom_in_out
         self.zoom_range = zoom_range
@@ -64,9 +67,23 @@ class GravLensingDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.id_list is None:
-            img = np.copy(self.data[idx])
+            img_conv = np.copy(self.data_convergence[idx])[np.newaxis, :, :]
+            img_conv = self.normalize_convergence(img_conv)
+            if self.n_channels == 1:
+                img = img_conv
+            else:
+                img_photo = np.copy(self.data_photometry[idx])
+                img_photo = self.normalize_photometry(img_photo)
+                img = np.concatenate([img_conv, img_photo], axis=0)
         else:
-            img = np.copy(self.data[self.idx_map(idx)])
+            img_conv = np.copy(self.data_convergence[self.idx_map(idx)])[np.newaxis, :, :]
+            img_conv = self.normalize_convergence(img_conv)
+            if self.n_channels == 1:
+                img = img_conv
+            else:
+                img_photo = np.copy(self.data_photometry[self.idx_map(idx)])
+                img_photo = self.normalize_photometry(img_photo)
+                img = np.concatenate([img_conv, img_photo], axis=0)
         img = img.reshape(self.n_channels,
                           self.original_resolution,
                           self.original_resolution)
@@ -124,7 +141,7 @@ class TNGv5(GravLensingDataset):
         return data
 
     def normalize_photometry(self, data):
-        data = (np.log(data + 1e-9) + 20.75) / 11.75
+        data = (np.log(data + 1e-9) + 20.73) / 13.59
         return data
 
 

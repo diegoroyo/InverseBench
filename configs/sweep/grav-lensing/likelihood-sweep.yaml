@@ -1,0 +1,26 @@
+program: main.py
+project: GL
+name: grav-lensing-full-likelihood-hera
+method: bayes
+metric:
+  goal: maximize
+  name: psnr
+
+parameters:
+  algorithm.method.learning_rate:
+    distribution: log_uniform_values
+    max: 1.0     
+    min: 0.00001 
+  algorithm.method.tv_regularization_weight:
+    distribution: log_uniform_values
+    max: 1e6    #1e5
+    min: 1e1    #1e3
+
+command:
+  - python
+  - ${program}
+  - problem=grav-lensing-strong-tngv5aug-hera
+  - algorithm=likelihood
+  - pretrain=grav-lensing-tngv5aug-fov225
+  - wandb=True
+  - ${args_no_hyphens}

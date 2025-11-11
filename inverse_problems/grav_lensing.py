@@ -29,309 +29,35 @@ def unnormalize_surface_mass_density(d):
     return (torch.exp(7.25 * d - 5.3) - 5e-3)
 
 
-def image_hash32(self, img: torch.Tensor) -> torch.Tensor:
-    """
-    Computes a 32-bit integer hash for a 2D image tensor.
-    Suitable for torch.int64 dtype input; result is torch.int32 scalar.
-    """
-    import torch
-    assert img.ndim == 2, "Image must be 2D"
-    # Ensure consistent integer dtype
-    x = img.to(torch.int64).contiguous()
-
-    MULT = 6364136223846793005  # LCG multiplier
-    INC = 1                     # LCG increment
-
-    # Reduce along the last dimension iteratively
-    while x.ndim > 0:
-        acc = torch.zeros_like(x[..., 0])
-        for i in range(x.shape[-1]):
-            acc = acc * MULT + INC + x.select(-1, i)
-        x = acc
-
-    # Cast final 64-bit result into 32-bit hash
-    return x.to(torch.uint32)
-
-
-@torch.no_grad
-def compute_strong_lenses(self, kappa, verbose=False, plot=False, force_write=False):
-    from caustics.utils import meshgrid
-    from caustics import PixelatedConvergence, FlatLambdaCDM, LensSource
-    from matplotlib.lines import Line2D
-    import torch
-    torch.set_default_device(self.device)
-    import pickle
-    import os
-    import matplotlib.pyplot as plt
-    seed = self.image_hash32(kappa)
-
-    if not force_write and os.path.exists(f'/tmp/lensed_pixels.pkl'):
-        with open(f'/tmp/lensed_pixels.pkl', 'rb') as f:
-            result = pickle.load(f)
-            for i, (source, lensed) in enumerate(result):
-                result[i] = (
-                    source.to(self.device),
-                    lensed.to(self.device),
-                )
-            # torch.set_default_device(other_device)
-        return result
-
-    fov_x = 100
-    fov_y = 100
-
-    cosmology = FlatLambdaCDM()
-
-    lens = PixelatedConvergence(cosmology=cosmology,
-                                pixelscale=fov_x / kappa.shape[0],
-                                z_l=0.5, x0=fov_x/2, y0=fov_y/2,
-                                convergence_map=kappa)
-
-    n_pix = kappa.shape[0]
-    res = fov_x / n_pix
-    thx, thy = meshgrid(
-        res,
-        n_pix,
-        n_pix,
-        dtype=torch.float32,
-    )
-    thx = thx.to(self.device) + fov_x / 2
-    thy = thy.to(self.device) + fov_y / 2
-
-    z_s = torch.tensor(1.0, dtype=torch.float32, device=self.device)
-
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-    axs[0].set_title("Convergence (full lens)")
-    axs[1].set_title("Zoom @ critical, caustic lines")
-    axs[2].set_title("Zoom @ lensed points")
-    cmap = axs[0].imshow(np.log(kappa.detach().cpu().numpy() + 1e-4), cmap='gray', origin='lower', extent=(0, fov_y, 0, fov_x))
-    fig.colorbar(cmap, ax=axs[0])
-    cmap = axs[1].imshow(np.log(kappa.detach().cpu().numpy() + 1e-4), cmap='gray', origin='lower', extent=(0, fov_y, 0, fov_x))
-    fig.colorbar(cmap, ax=axs[1])
-    cmap = axs[2].imshow(np.log(kappa.detach().cpu().numpy() + 1e-4), cmap='gray', origin='lower', extent=(0, fov_y, 0, fov_x))
-    fig.colorbar(cmap, ax=axs[2])
-
-    A = lens.jacobian_lens_equation(thx, thy, z_s)
-    detA = torch.linalg.det(A)
-
-    CS = axs[0].contour(thx.detach().cpu().numpy(), thy.detach().cpu().numpy(), detA.detach().cpu().numpy(), levels=[0.0], colors="b", zorder=1)
-    CS = axs[1].contour(thx.detach().cpu().numpy(), thy.detach().cpu().numpy(), detA.detach().cpu().numpy(), levels=[0.0], colors="b", zorder=1)
-    CS = axs[2].contour(thx.detach().cpu().numpy(), thy.detach().cpu().numpy(), detA.detach().cpu().numpy(), levels=[0.0], colors="b", zorder=1)
-    # Get the path from the matplotlib contour plot of the critical line
-
-    min_x, max_x = None, None
-    min_y, max_y = None, None
-
-    paths = CS.allsegs[0]
-    axs[1].plot([0], [0], color='r', lw=1, label='Critical line')
-    caustic_paths = []
-    for i, path in enumerate(paths):
-        # Collect the path into a discrete set of points
-        x1 = torch.tensor(list(float(vs[0]) for vs in path)).to(self.device)
-        x2 = torch.tensor(list(float(vs[1]) for vs in path)).to(self.device)
-        # raytrace the points to the source plane
-        y1, y2 = lens.raytrace(x1, x2, z_s)
-        if len(y1) == 0 or len(y2) == 0:
-            continue
-        min_x = y1.min() if min_x is None else min(min_x, y1.min())
-        max_x = y1.max() if max_x is None else max(max_x, y1.max())
-        min_y = y2.min() if min_y is None else min(min_y, y2.min())
-        max_y = y2.max() if max_y is None else max(max_y, y2.max())
-        for sx, sy in zip(y1, y2):
-            caustic_paths.append((sx, sy))
-
-        # Plot the caustic
-        if plot:
-            axs[0].plot(y1, y2, color="r", zorder=1)
-            axs[1].plot(y1, y2, color="r", zorder=1)
-            axs[2].plot(y1, y2, color="r", zorder=1)
-    caustic_paths = np.array(caustic_paths)
-
-    if min_x is None or max_x is None or min_y is None or max_y is None:
-        if verbose: print("No critical line found, skipping")
-        plt.close(fig)
-        return
-    x_range = max_x - min_x
-    y_range = max_y - min_y
-    padding = 0.3
-    if plot:
-        axs[1].set_xlim(min_x - x_range * padding, max_x + x_range * padding)
-        axs[1].set_ylim(min_y - y_range * padding, max_y + y_range * padding)
-    if x_range < 0.15 or y_range < 0.15:
-        if verbose: print(f"Critical line is too small ({x_range:.2f} x {y_range:.2f}), skipping")
-        plt.show()
-        # plt.close(fig)
-        return
-    # if x_range > 2.0 or y_range > 2.0:
-    #     if verbose: print(f"Critical line is too large ({x_range:.2f} x {y_range:.2f}), skipping")
-    #     plt.show()
-    #     # plt.close(fig)
-    #     return
-
-    np.random.seed(seed)
-
-    target_num_sources = np.random.choice([8])
-    colors = ['g', 'orange', 'purple', 'blue', 'cyan', 'g', 'orange', 'purple', 'blue', 'cyan']
-    sources = []
-    attempts = 0
-    while len(sources) < target_num_sources:
-        attempts += 1
-        if attempts > 1000:
-            if verbose: print("Too many attempts to find sources, skipping")
-            plt.show()
-            plt.close(fig)
-            return
-        good_attempt = False
-        while not good_attempt:
-            s_x = torch.tensor(np.random.uniform(min_x.detach().cpu().numpy(), max_x.detach().cpu().numpy())).to(self.device)
-            s_y = torch.tensor(np.random.uniform(min_y.detach().cpu().numpy(), max_y.detach().cpu().numpy())).to(self.device)
-            good_attempt = np.linalg.norm(caustic_paths - np.array([s_x.detach().cpu().numpy(), s_y.detach().cpu().numpy()]).reshape(1, 2), axis=1).min() < 40
-
-        try:
-            l_x, l_y = lens.forward_raytrace(s_x, s_y, z_s, epsilon=1e-3, fov=100.0, divisions=1000)
-            if len(l_x) <= 1:
-                continue
-            # l_x = torch.cat((l_x, torch.tensor([l_x[-1]])))
-            # l_y = torch.cat((l_y, torch.tensor([l_y[-1]])))
-        except Exception as e:
-            import traceback
-            print(traceback.format_exc())
-            print(e)
-            continue
-
-        print('lens', len(sources), '->', len(l_x))
-
-        good = True
-        for sp_x, sp_y, _, __ in sources:
-            if torch.norm(torch.tensor([s_x, s_y]) - torch.tensor([sp_x, sp_y])) < 0.1:
-                good = False
-                break
-        if not good:
-            continue
-
-        print('!!!')
-
-        sources.append((s_x, s_y, l_x, l_y))
-
-    min_x, max_x = None, None
-    min_y, max_y = None, None
-
-    result = []
-    for i, (s_x, s_y, l_x, l_y) in enumerate(sources):
-        min_x = l_x.min() if min_x is None else min(min_x, l_x.min())
-        max_x = l_x.max() if max_x is None else max(max_x, l_x.max())
-        min_y = l_y.min() if min_y is None else min(min_y, l_y.min())
-        max_y = l_y.max() if max_y is None else max(max_y, l_y.max())
-        if plot:
-            if i == 0:
-                axs[1].scatter(s_x, s_y, color=colors[i], marker='.', s=300, label='Source')
-            else:
-                axs[1].scatter(s_x, s_y, color=colors[i], marker='.', s=300)
-            for j, (l_xi, l_yi) in enumerate(zip(l_x, l_y)):
-                if i == j == 0:
-                    axs[2].scatter(l_xi, l_yi, color=colors[i], marker='x', s=300, label='Lensed source')
-                else:
-                    axs[2].scatter(l_xi, l_yi, color=colors[i], marker='x', s=300)
-        result.append((
-            torch.tensor([s_x, s_y]).to(self.device),
-            torch.stack([l_x, l_y], dim=1).to(self.device),
-        ))
-
-    x_range = max_x - min_x
-    y_range = max_y - min_y
-    padding = 0.3
-    if plot:
-        axs[2].set_xlim(min_x - x_range * padding, max_x + x_range * padding)
-        axs[2].set_ylim(min_y - y_range * padding, max_y + y_range * padding)
-        # axs[0].legend()
-        axs[1].legend()
-        axs[2].legend()
-    if plot:
-        plt.show()
-    else:
-        plt.close(fig)
-
-    with open(f'/tmp/lensed_pixels.pkl', 'wb') as f:
-        pickle.dump(result, f)
-    # torch.set_default_device(other_device)
-    return result
-
-# def forward(self, inputs, **kwargs):
-#     from caustics import PixelatedConvergence, FlatLambdaCDM
-#     # inputs has shape (N, C, H, W)
-#     N, C, H, W = inputs.shape
-#     assert H == W == 512
-#     assert C == 1
-
-#     cosmology = FlatLambdaCDM()
-
-#     fov = 100
-#     z_l = 0.5
-
-#     z_s = torch.tensor(1.0).to(self.device)
-
-#     outputs = []
-#     for i in range(N):
-#         img = inputs[i, 0]
-
-#         # import matplotlib.pyplot as plt
-#         # plt.imshow(img.cpu().detach().numpy())
-#         # plt.colorbar()
-#         # plt.savefig('/home/droyo/code-darkmatter/_debug/test.png')
-#         # plt.close()
-#         # undo normalization
-#         img_unnorm = self.unnormalize_convergence(torch.clamp(torch.clone(img), -1, 1))
-
-#         result = self.compute_strong_lenses(img_unnorm, verbose=False, plot=False)
-#         if result is None:
-#             print('No data????')
-
-#         lens = PixelatedConvergence(cosmology=cosmology,
-#                                     pixelscale=fov / img_unnorm.shape[0],
-#                                     z_l=z_l, x0=fov/2, y0=fov/2,
-#                                     convergence_map=img_unnorm)
-
-#         for source, lensed in result:
-#             a1, a2 = lens.reduced_deflection_angle(*lensed.T, z_s)
-#             unlensed = lensed - torch.stack((a1, a2), dim=1)
-#             # for i in range(len(lensed)):
-#             #     for j in range(i+1, len(lensed)):
-#             #         outputs.append(unlensed[i] - unlensed[j])
-#             centroid = torch.mean(lensed.T, axis=1)
-#             for i in range(len(lensed)):
-#                 outputs.append(unlensed[i] - centroid)
-
-#         # torch.set_default_device(other_device)
-
-#     result = torch.stack(outputs, dim=0).reshape(N, -1)
-#     return result
-
-
-
 class WeakOnlyGravLensing(BaseOperator):
     def __init__(self,
                  image_size=512,
                  sigma_noise=0.0,
+                 fov=225,
                  z_l=0.5,
                  shear_filename=None,
-                 density_estimation_neighbours=5,
+                 use_reduced_shear=False,
+                 noise_profile='traditional',
                  unnorm_shift=0.0, unnorm_scale=1.0, device=None):
+        assert not use_reduced_shear, 'NYI for use_reduced_shear=True'
         self.image_size = image_size
         self.sigma_noise = 0.0
         self.unnorm_shift = unnorm_shift
         self.unnorm_scale = unnorm_scale
         self.device = device
-        self.density_estimation_neighbours = density_estimation_neighbours
+        self.use_reduced_shear = use_reduced_shear
+        self.noise_profile = noise_profile
 
         self.z_l = z_l
         self.z_ref = 1.0
         self.sigma_cr_ref = critical_density(self.z_l, self.z_ref)
-        self.downscale = 4
+        self.downscale = 1
 
         if shear_filename is not None:
             assert sigma_noise == 0.0, "If you're loading shear data, do not add noise on top of it"
-            shear_data = np.load(shear_filename)
+            shear_data = np.load(shear_filename).astype(np.float32)
             self.weak_pixels = torch.tensor(
-                shear_data[:, 0:2], device=self.device, dtype=torch.float32)
+                shear_data[:, 0:2] * image_size / fov, device=self.device, dtype=torch.float32)
             self.shear_values = torch.tensor(
                 shear_data[:, 2:4], device=self.device, dtype=torch.float32)
             shear_redshifts = torch.tensor(
@@ -339,7 +65,7 @@ class WeakOnlyGravLensing(BaseOperator):
             crit_densities = []
             shear_redshift_terms = []
             for z_s in shear_redshifts:
-                old = self.critical_density(self.z_l, z_s.item())
+                old = critical_density(self.z_l, z_s.item())
                 new = self.sigma_cr_ref
                 crit_densities.append(old)
                 shear_redshift_terms.append(old / new)
@@ -347,6 +73,8 @@ class WeakOnlyGravLensing(BaseOperator):
                 crit_densities, device=self.device, dtype=torch.float32)
             self.shear_redshift_terms = torch.tensor(
                 shear_redshift_terms, device=self.device, dtype=torch.float32)
+            
+            self.g1_gt_dense, self.g2_gt_dense = self.compute_dense_shear_from_observations()
         else:
             if sigma_noise == 0.0:
                 print('Warning: simulating shear data without noise. Keep in mind that this is not realistic.')
@@ -388,14 +116,18 @@ class WeakOnlyGravLensing(BaseOperator):
             img[y1, x1] * xt * yt
         )
 
-    def density_estimation_rbf(self, coords, weights, range_x, range_y):
+    def density_estimation_rbf(self, coords, weights, range_x, range_y, noise_profile='traditional'):
         if hasattr(coords, 'detach'):
             coords = coords.detach().cpu().numpy()
         if hasattr(weights, 'detach'):
             weights = weights.detach().cpu().numpy()
         from scipy.interpolate import Rbf
-        rbf = Rbf(coords[:,0], coords[:,1], weights, function='multiquadric', epsilon=0.1, smooth=3000.0)  # try 'thin_plate' too
-        # rbf = Rbf(coords[:,0], coords[:,1], weights, function='thin_plate', epsilon=0.1, smooth=10000.0)  # try 'thin_plate' too
+        if noise_profile == 'traditional':
+            rbf = Rbf(coords[:,0], coords[:,1], weights, function='multiquadric', epsilon=0.1, smooth=100.0)  # try 'thin_plate' too
+        elif noise_profile == 'kinematic':
+            rbf = Rbf(coords[:,0], coords[:,1], weights, function='multiquadric', epsilon=0.1, smooth=0.1)  # try 'thin_plate' too
+        else:
+            raise AssertionError("Unknown noise profile for RBF density estimation")
 
         # print(len(coords), len(weights))
         assert len(coords) == len(weights)
@@ -413,6 +145,57 @@ class WeakOnlyGravLensing(BaseOperator):
         grid_vals = rbf(Y.ravel(), X.ravel()).reshape(X.shape)
 
         return grid_vals
+    
+    def compute_dense_shear_from_observations(self):
+        """ Observations is (N, 5) tensor with (x, y, g1, g2, z_s) """
+        g1_gt_sparse, g2_gt_sparse = self.shear_values[:, 0], self.shear_values[:, 1]
+        # convert reduced shear at whatever redshift to shear at z=1.0 (reference)
+        # NOTE this should be changed, ideally network should estimate \Sigma and then we
+        # divide by \Sigma_cr
+        # if self.use_reduced_shear:
+        #     sigma_est_sparse = self.interpolate_linear(
+        #         self.weak_pixels[:, 0], self.weak_pixels[:, 1], sigma_est)
+        #     g1_gt_sparse = g1_gt_sparse * (1 - sigma_est_sparse / self.critical_densities)
+        #     g2_gt_sparse = g2_gt_sparse * (1 - sigma_est_sparse / self.critical_densities)
+
+        # NOTE hera data works much better when you divide
+        g1_gt_sparse = g1_gt_sparse / self.shear_redshift_terms
+        g2_gt_sparse = g2_gt_sparse / self.shear_redshift_terms
+
+        # filter only WL pixels on GT
+        g1_gt_dense = self.density_estimation_rbf(
+            self.weak_pixels / self.downscale,
+            g1_gt_sparse,
+            (0, self.image_size // self.downscale), (0, self.image_size // self.downscale),
+            noise_profile=self.noise_profile)
+        g1_gt_dense = torch.tensor(g1_gt_dense, device=self.device).reshape(
+            1, 1, self.image_size // self.downscale, self.image_size // self.downscale)
+        g1_gt_dense = torch.nn.functional.interpolate(
+            g1_gt_dense, size=(self.image_size, self.image_size), mode='bilinear')
+        g2_gt_dense = self.density_estimation_rbf(
+            self.weak_pixels / self.downscale,
+            g2_gt_sparse,
+            (0, self.image_size // self.downscale), (0, self.image_size // self.downscale),
+            noise_profile=self.noise_profile)
+        g2_gt_dense = torch.tensor(g2_gt_dense, device=self.device).reshape(
+            1, 1, self.image_size // self.downscale, self.image_size // self.downscale)
+        g2_gt_dense = torch.nn.functional.interpolate(
+            g2_gt_dense, size=(self.image_size, self.image_size), mode='bilinear')
+        
+        
+        import matplotlib.pyplot as plt
+        fig, axs = plt.subplots(1, 2, figsize=(15, 10))
+        cmap = axs[0].imshow(g1_gt_dense.detach().cpu().numpy().squeeze())
+        fig.colorbar(cmap, ax=axs[0])
+        cmap = axs[1].imshow(g2_gt_dense.detach().cpu().numpy().squeeze())
+        fig.colorbar(cmap, ax=axs[1])
+        fig.suptitle(f'Weak lensing')
+        plt.tight_layout()
+        plt.savefig(f'/home/droyo/code-darkmatter/_debug/_weak_dense.png')
+        plt.close()
+        
+        return g1_gt_dense.float(), g2_gt_dense.float()
+
 
     def forward(self, inputs, **kwargs):
         # inputs has shape (N, C, H, W)
@@ -421,7 +204,7 @@ class WeakOnlyGravLensing(BaseOperator):
 
         sigma = unnormalize_surface_mass_density(torch.clamp(torch.clone(inputs), 0, 1))
 
-        return sigma
+        return sigma / self.sigma_cr_ref
 
     def loss(self, pred, observation, **kwargs):
         """
@@ -433,58 +216,22 @@ class WeakOnlyGravLensing(BaseOperator):
         Returns:
             - loss (torch.tensor): loss value, shape (batch_size, )
         """
-        sigmas_est = self.forward(pred)
-        sigmas_gt = observation
-        N, C, H, W = sigmas_est.shape
-        sigmas_gt = sigmas_gt.reshape(N, C, H, W)
+        kappas_est = self.forward(pred)
+        N, C, H, W = kappas_est.shape
         photometries = kwargs.get('conditioning', None)
         idx = kwargs.get('i', None)
 
-        loss = torch.zeros(N, device=self.device)
+        loss = torch.zeros(N, device=self.device, dtype=torch.float32)
         for i in range(N):
-            sigma_est = sigmas_est[i, 0]
-            sigma_gt = sigmas_gt[i, 0]
-            if photometries is not None:
-                photometry = torch.clone(photometries[i, 0])
-                photometry[photometry < torch.quantile(photometry, 0.75)] = torch.quantile(photometry, 0.75)
-                photometry[photometry > torch.quantile(photometry, 0.99)] = torch.quantile(photometry, 0.99)
-                photometry = (photometry - photometry.min()) / (photometry.max() - photometry.min())
-                scale_min = 0.0
-                loss_scale = ((1 - photometry) ** 3) * (1 - scale_min) + scale_min
-            else:
-                loss_scale = torch.ones_like(sigma_gt).squeeze()
+            kappa_est = kappas_est[i, 0]
+            gt_g1_i = self.g1_gt_dense[i, 0]
+            gt_g2_i = self.g2_gt_dense[i, 0]
 
-            g1_gt_sparse, g2_gt_sparse = self.shear_values[:, 0], self.shear_values[:, 1]
-            # convert reduced shear at whatever redshift to shear at z=1.0 (reference)
-            # NOTE this should be changed, ideally network should estimate \Sigma and then we
-            # divide by \Sigma_cr
-            sigma_est_sparse = self.interpolate_linear(
-                self.weak_pixels[:, 0], self.weak_pixels[:, 1], sigma_est)
-            g1_gt_sparse = g1_gt_sparse * (1 - sigma_est_sparse / self.critical_densities)
-            g2_gt_sparse = g2_gt_sparse * (1 - sigma_est_sparse / self.critical_densities)
-
-            # filter only WL pixels on GT
-            g1_gt_dense = self.density_estimation_rbf(
-                self.weak_pixels / self.downscale,
-                g1_gt_sparse,
-                (0, self.image_size // self.downscale), (0, self.image_size // self.downscale))
-            g1_gt_dense = torch.tensor(g1_gt_dense, device=self.device).reshape(
-                1, 1, self.image_size // self.downscale, self.image_size // self.downscale)
-            g1_gt_dense = torch.nn.functional.interpolate(
-                g1_gt_dense, size=(self.image_size, self.image_size), mode='bilinear')
-            g2_gt_dense = self.density_estimation_rbf(
-                self.weak_pixels / self.downscale,
-                g2_gt_sparse,
-                (0, self.image_size // self.downscale), (0, self.image_size // self.downscale))
-            g2_gt_dense = torch.tensor(g2_gt_dense, device=self.device).reshape(
-                1, 1, self.image_size // self.downscale, self.image_size // self.downscale)
-            g2_gt_dense = torch.nn.functional.interpolate(
-                g2_gt_dense, size=(self.image_size, self.image_size), mode='bilinear')
-
-            g1_est, g2_est = self.convergence_to_shear(sigma_est)
+            g1_est, g2_est = self.convergence_to_shear(kappa_est)
             """ NOTE: Using L1 loss, try other ones to see which one works best """
-            loss[i] = torch.sum(torch.abs(g1_gt_dense - g1_est) * loss_scale + torch.abs(g2_gt_dense - g2_est) * loss_scale)
-            # loss += torch.sum((g1_gt - g1_est) ** 2 * loss_scale + (g2_gt - g2_est) ** 2 * loss_scale)
+            # loss[i] = torch.mean(torch.abs(self.g1_gt_dense - g1_est) + torch.abs(self.g2_gt_dense - g2_est))
+            loss[i] = (torch.nn.functional.mse_loss(gt_g1_i, g1_est) +
+                        torch.nn.functional.mse_loss(gt_g2_i, g2_est))
 
             # if idx % 20 == 0:
             #     import matplotlib.pyplot as plt
@@ -522,6 +269,7 @@ class StrongOnlyGravLensing(BaseOperator):
                  image_size=512, sigma_noise=0.0,
                  strong_lenses_file=None,
                  z_l=0.5, fov=225,
+                 likelihood_reference=None,
                  unnorm_shift=0.0, unnorm_scale=1.0, device=None):
         assert np.isclose(sigma_noise, 0.0), 'sigma_noise != 0.0 is NYI'
         self.image_size = image_size
@@ -536,7 +284,14 @@ class StrongOnlyGravLensing(BaseOperator):
         self.lambda_geo = 1e-2
         self.lambda_img = 1e-3
 
-        self.ll_ref = torch.load('/home/droyo/code-darkmatter/_debug/current_ll_ref.pt')
+        if likelihood_reference is not None:
+            self.ll_ref = torch.load(likelihood_reference)
+            if isinstance(self.ll_ref, dict):
+                self.ll_ref = self.ll_ref['recon']
+            self.ll_ref = self.ll_ref.to(device)
+        else:
+            self.ll_ref = None
+        # self.ll_ref = torch.load('/home/droyo/code-darkmatter/_debug/ll_ref_llsweep_psnr30.pt')['recon'].to(device)
 
         if strong_lenses_file is not None:
             self.strong_lenses = self.get_strong_lenses(strong_lenses_file)
@@ -676,8 +431,11 @@ class StrongOnlyGravLensing(BaseOperator):
         Returns:
             - loss (torch.tensor): loss value, shape (batch_size, )
         """
-        return ((self.ll_ref.unsqueeze(0).unsqueeze(0) - pred) ** 2).flatten(start_dim=1).mean(dim=1)
-        return (self.forward(pred, **kwargs)).flatten(start_dim=1).sum(dim=1)
+        # i = kwargs.get('i', None)
+        if self.ll_ref is not None:
+            return ((self.ll_ref.unsqueeze(0).unsqueeze(0) - pred) ** 2).flatten(start_dim=1).mean(dim=1)
+        else:
+            return (self.forward(pred, **kwargs)).flatten(start_dim=1).sum(dim=1)
 
 
     # def loss(self, pred, observation, **kwargs):
@@ -696,16 +454,18 @@ class StrongOnlyGravLensing(BaseOperator):
 class WeakAndStrongGravLensing(BaseOperator):
     """ Just calls the two operators above """
     def __init__(self,
-                 loss_factor_weak=0.001, # common parameters
-                 loss_factor_strong=0.3,
+                 loss_factor_weak=0.05, # common parameters
+                 loss_factor_strong=1.0,
                  image_size=512,
                  sigma_noise_weak=0.0,
                  sigma_noise_strong=0.0,
                  z_l=0.5,
                  fov=225,
                  shear_filename=None, # weak-only parameters
-                 density_estimation_neighbours=5,
+                 use_reduced_shear=False,
+                 noise_profile='traditional',
                  strong_lenses_file=None,  # strong-only parameters
+                 likelihood_reference=None,
                  unnorm_shift=0.0, unnorm_scale=1.0, device=None):  # final common parameters
         self.loss_factor_weak = loss_factor_weak
         self.loss_factor_strong = loss_factor_strong
@@ -718,7 +478,8 @@ class WeakAndStrongGravLensing(BaseOperator):
             sigma_noise=sigma_noise_weak,
             z_l=z_l,
             shear_filename=shear_filename,
-            density_estimation_neighbours=density_estimation_neighbours,
+            use_reduced_shear=use_reduced_shear,
+            noise_profile=noise_profile,
             unnorm_shift=unnorm_shift, unnorm_scale=unnorm_scale, device=device)
         self.strong = StrongOnlyGravLensing(
             image_size=image_size,
@@ -726,6 +487,7 @@ class WeakAndStrongGravLensing(BaseOperator):
             strong_lenses_file=strong_lenses_file,
             z_l=z_l,
             fov=fov,
+            likelihood_reference=likelihood_reference,
             unnorm_shift=unnorm_shift, unnorm_scale=unnorm_scale, device=device)
 
 

@@ -1,0 +1,24 @@
+name: grav-lensing-strong-tngv5aug-ares
+prior: /home/droyo/code-darkmatter/v51-inversebench-v3/InverseBench/exps/pretrain/gravlensing-tngv5aug-fov225-pretrain/ckpts/ckpt_90000.pt
+model:
+  _target_: inverse_problems.grav_lensing.StrongOnlyGravLensing
+  strong_lenses_file: /home/droyo/code-darkmatter/v0-datasets/ares/ares_strong_lenses_fov225.pkl
+  fov: 225.0
+  z_l: 0.5
+  unnorm_scale: 1.0
+  unnorm_shift: 0.0
+
+data:
+  _target_: training.dataset.TNGv5
+  root_convergence: /home/droyo/code-darkmatter/v0-datasets/ares/ares_kappa_surfdensity_fov225.npy
+  root_photometry: /home/droyo/code-darkmatter/v0-datasets/ares/ares_f125606814_flux.npy
+  resolution: 512
+  compute_strong_lenses: false
+  random_flip: false
+  zoom_in_out: false
+  id_list: 0 # 0,1,2,3
+
+evaluator:
+  _target_: eval.GravLensingEvaluator
+
+exp_dir: exps/inference/grav-lensing-strong-tngv5aug-ares

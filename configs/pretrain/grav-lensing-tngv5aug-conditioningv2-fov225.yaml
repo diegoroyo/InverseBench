@@ -1,0 +1,43 @@
+data:
+  _target_: training.dataset.TNGv5
+  root_convergence: /home/droyo/code-darkmatter/v0-datasets/tng300-1-snap67+augv5-train-surfmass[dm+baryon]-fov[225]-res[512].npy
+  root_photometry: /home/droyo/code-darkmatter/v0-datasets/tng300-1-snap67+augv5-train-surfphoto[HSTv2]-fov[225]-res[512].npy
+  resolution: 512
+
+model:
+  _target_: models.precond.VPPrecond
+  model_type: SongUNet
+  img_resolution: 512
+  img_channels: 1
+  conditioning_channels: 3
+  label_dim: 0
+  model_channels: 128
+  channel_mult: [1, 1, 2, 2, 4, 4]
+  attn_resolutions: [16]
+  num_blocks: 1
+  dropout: 0.0
+
+loss:
+  _target_: training.loss.VPLoss
+
+train:
+  lr: 0.0001
+  batch_size: 2
+  num_steps: 200_001
+  warmup_steps: 500
+  ema_decay: 0.9999
+  grad_clip: 0.0
+  ema_halflife_nimg: 209600
+  ema_rampup_ratio: 0.05
+  tf32: True
+  resume: None
+  num_workers: 4
+
+log:
+  exp_dir: 'exps/pretrain'
+  exp_name: gravlensing-tngv5aug-conditioningv2-fov225-pretrain
+  wandb: False
+  project: 'gravlensing-tngv5aug-conditioningv2-fov225-prior'
+  group: 'training'
+  log_every: 50
+  save_every: 10000

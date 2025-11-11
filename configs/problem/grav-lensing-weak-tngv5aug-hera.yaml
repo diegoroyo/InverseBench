@@ -1,18 +1,18 @@
-name: grav-lensing-strong-tngv5aug-hera
+name: grav-lensing-weak-tngv5aug-hera
 prior: /home/droyo/code-darkmatter/v51-inversebench-v3/InverseBench/exps/pretrain/gravlensing-tngv5aug-fov225-pretrain/ckpts/ckpt_90000.pt
 model:
-  _target_: inverse_problems.grav_lensing.StrongOnlyGravLensing
-  strong_lenses_file: /home/droyo/code-darkmatter/v0-datasets/hera/hera_strong_lenses_fov225.pkl
-  fov: 225.0
+  _target_: inverse_problems.grav_lensing.WeakOnlyGravLensing
   z_l: 0.507
-  likelihood_reference: /home/droyo/code-darkmatter/v0-datasets/hera/hera_ll_ref.pt
+  noise_profile: traditional
+  shear_filename: /home/droyo/code-darkmatter/v0-datasets/hera/hera_weak_lensing.npy
   unnorm_scale: 1.0
   unnorm_shift: 0.0
 
 data:
   _target_: training.dataset.TNGv5
   root_convergence: /home/droyo/code-darkmatter/v0-datasets/hera/hera_kappa_surfdensity_fov225.npy
-  root_photometry: /home/droyo/code-darkmatter/v0-datasets/hera/hera_v_band_proxy_fov225.npy
+  root_photometry: /home/droyo/code-darkmatter/v0-datasets/hera/hera_f125606814_flux.npy
+  # root_photometry: /home/droyo/code-darkmatter/v0-datasets/hera_v_band_proxy_fov225.npy
   resolution: 512
   compute_strong_lenses: false
   random_flip: false
@@ -22,4 +22,4 @@ data:
 evaluator:
   _target_: eval.GravLensingEvaluator
 
-exp_dir: exps/inference/grav-lensing-strong-tngv5aug-hera
+exp_dir: exps/inference/grav-lensing-weak-tngv5aug-hera

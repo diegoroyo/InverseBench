@@ -133,7 +133,7 @@ class DAPS(Algo):
             # 1. reverse diffusion
             diffusion_scheduler = Scheduler(**self.diffusion_scheduler_config, sigma_max=sigma)
             sampler = DiffusionSampler(diffusion_scheduler)
-            x0hat = sampler.sample(self.net, xt, SDE=False, verbose=False)
+            x0hat = sampler.sample(self.net, xt, SDE=False, verbose=False, conditioning=conditioning)
 
             # 2. langevin dynamics
             x0y = self.lgvd.sample(x0hat, self.forward_op, observation, sigma, step / self.annealing_scheduler.num_steps, conditioning=conditioning)

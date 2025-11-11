@@ -2,5 +2,5 @@ name: Likelihood
 method:
   _target_: algo.likelihood.Likelihood
   num_steps: 1000
-  learning_rate: 2e-3
+  learning_rate: 1e-2
   tv_regularization_weight: 3e4

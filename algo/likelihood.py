@@ -30,6 +30,7 @@ class Likelihood(Algo):
             self.net.img_channels,
             self.net.img_resolution, self.net.img_resolution,
             device=device,
+            dtype=torch.float32,
             requires_grad=True)
 
         pbar = tqdm(range(self.num_steps))
