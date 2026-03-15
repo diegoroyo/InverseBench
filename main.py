@@ -90,12 +90,15 @@ def main(config):
         data_id = testset.id_list[i]
         save_path = os.path.join(exp_dir, f'result_{data_id}.pt')
         if config.inference:
+            conditioning = data.get('conditioning', None)
+            data_idx = data.get('data_idx', None)
+            forward_op.select_data_idx(data_idx)
             # get the observation
-            observation = forward_op(data)
+            observation = forward_op(data, conditioning=conditioning)
             target = data['target']
             # run the algorithm
             logger.info(f'Running inference on test sample {data_id}...')
-            recon = algo.inference(observation, num_samples=config.num_samples)
+            recon = algo.inference(observation, conditioning=conditioning, num_samples=config.num_samples)
             logger.info(f'Peak GPU memory usage: {torch.cuda.max_memory_allocated() / 1024 ** 3:.2f} GB')
 
             result_dict = {

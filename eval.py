@@ -8,7 +8,7 @@ import torch
 import numpy as np
 from piq import LPIPS, psnr, ssim
 from collections import defaultdict
-from training.loss import DynamicRangePSNRLoss, DynamicRangeSSIMLoss
+from training.loss import DynamicRangePSNRLoss, DynamicRangeSSIMLoss, RelativePowerSpectrumSimilarityLoss
 
 
 class Evaluator(ABC):
@@ -61,6 +61,50 @@ class Evaluator(ABC):
             metric_state[key] = np.mean(val)
             metric_state[f'{key}_std'] = np.std(val)
         return metric_state
+
+
+class DarkClustersEvaluator(Evaluator):
+    def __init__(self, forward_op=None):
+        from training.dataset import DarkClustersDataset
+        unnorm = lambda x: (DarkClustersDataset.unnormalize_mass(x) - DarkClustersDataset.DATASET_MIN).clip(0, DarkClustersDataset.DATASET_RANGE)
+        rpss_loss = RelativePowerSpectrumSimilarityLoss()
+        metric_list = {
+            'psnr': lambda p, t: psnr(unnorm(p), unnorm(t), data_range=DarkClustersDataset.DATASET_RANGE),
+            'ssim': lambda p, t: ssim(unnorm(p), unnorm(t), data_range=DarkClustersDataset.DATASET_RANGE),
+            'psnr_meanshift': lambda p, t: psnr(unnorm(p - p.mean() + t.mean()), unnorm(t), data_range=DarkClustersDataset.DATASET_RANGE),
+            'ssim_meanshift': lambda p, t: ssim(unnorm(p - p.mean() + t.mean()), unnorm(t), data_range=DarkClustersDataset.DATASET_RANGE),
+            'psnr_norm': lambda p, t: psnr(p.clip(0, 1), t.clip(0, 1)),
+            'ssim_norm': lambda p, t: ssim(p.clip(0, 1), t.clip(0, 1)),
+            'psnr_norm_meanshift': lambda p, t: psnr((p - p.mean() + t.mean()).clip(0, 1), t.clip(0, 1)),
+            'ssim_norm_meanshift': lambda p, t: ssim((p - p.mean() + t.mean()).clip(0, 1), t.clip(0, 1)),
+            'mse_norm_meanshift': lambda p, t: torch.mean(((p - p.mean() + t.mean()) - t) ** 2),
+            'rpss': lambda p, t: rpss_loss(unnorm(p), unnorm(t)),
+            'rpss_norm': rpss_loss,
+        }
+        super(DarkClustersEvaluator, self).__init__(
+            metric_list, forward_op=forward_op)
+        self.metric_state = defaultdict(list)
+
+    def __call__(self, pred, target, observation=None):
+        '''
+        Args:
+            - pred (torch.Tensor): (N, C, H, W)
+            - target (torch.Tensor): (C, H, W) or (N, C, H, W)
+        Returns:
+            - metric_dict (Dict): a dictionary of metric values
+        '''
+        pred, target, observation = pred.to(self.device), target.to(
+            self.device), observation.to(self.device)
+        
+        if target.ndim == 3:
+            target = target.unsqueeze(0)
+
+        metric_dict = {}
+        for metric_name, metric_func in self.metric_list.items():
+            val = metric_func(pred[:, 0:1, ...], target[:, 0:1, ...]).item()
+            metric_dict[metric_name] = val
+            self.metric_state[metric_name].append(val)
+        return metric_dict
 
 
 class BlackHoleEvaluator(Evaluator):

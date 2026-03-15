@@ -15,6 +15,99 @@ from pathlib import Path
 from PIL import Image
 
 
+class GravLensingDataset(Dataset):
+    def __init__(self, root_mass, root_photometry=None, resolution=512, original_resolution=512,
+                 random_flip=True, id_list=None): # zoom_in_out=True, zoom_range=[1, 1.145]
+        super().__init__()
+
+        self.root = root_mass
+        self.data_mass = np.load(root_mass, mmap_mode='r')
+        self.n_channels = 1
+        if root_photometry is not None:
+            self.data_photometry = np.load(root_photometry, mmap_mode='r')
+            assert self.data_photometry.shape[0] == self.data_mass.shape[0], \
+                'Mass and photometry datasets must have the same number of samples.'
+            self.n_channels += self.data_photometry.shape[1]
+
+        self.resolution = resolution
+        self.original_resolution = original_resolution
+        self.length = self.data_mass.shape[0]
+        self.random_flip = random_flip
+
+        self.id_list = id_list
+        if id_list is not None:
+            id_list = parse_int_list(id_list)
+            self.length = len(id_list)
+            self.idx_map = lambda x: id_list[x]
+            self.id_list = id_list
+
+    def normalize_mass(self, data):
+        raise NotImplementedError(
+            'Dataset must implement normalize_mass method.')
+
+    def normalize_photometry(self, data):
+        raise NotImplementedError(
+            'Dataset must implement normalize_photometry method.')
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        data_idx = idx
+        if self.id_list is not None:
+            data_idx = self.idx_map(idx)
+        img_conv = np.copy(self.data_mass[data_idx])[np.newaxis, :, :]
+        img_conv = self.normalize_mass(img_conv)
+        if self.n_channels == 1:
+            img = img_conv
+        else:
+            img_photo = np.copy(self.data_photometry[data_idx])
+            img_photo = self.normalize_photometry(img_photo)
+            img = np.concatenate([img_conv, img_photo], axis=0)
+        img = img.reshape(self.n_channels,
+                          self.original_resolution,
+                          self.original_resolution)
+        img = torch.from_numpy(img)
+
+        if self.random_flip and np.random.rand() < 0.5:
+            img = torch.flip(img, [2])  # left-right flip
+        if self.random_flip and np.random.rand() < 0.5:
+            img = torch.flip(img, [1])  # top-down flip
+
+        if self.n_channels == 1:
+            return {
+                'target': img,
+                'data_idx': data_idx
+            }
+        else:
+            return {
+                'target': img[0:1],
+                'conditioning': img[1:],
+                'data_idx': data_idx
+            }
+    
+
+class DarkClustersDataset(GravLensingDataset):
+    def normalize_mass(self, data):
+        data = (np.log(data + 5e-3) + 5.3) / 7.25
+        data = np.nan_to_num(data, nan=0.0)
+        return data
+    
+    @classmethod
+    def unnormalize_mass(cls, data):
+        return torch.exp(data * 7.25 - 5.3) - 5e-3
+    
+    DATASET_MIN = 2e-6
+    DATASET_MAX = 6e-2
+    DATASET_RANGE = DATASET_MAX - DATASET_MIN
+    ZERO_VALUE = 0.0
+
+    def normalize_photometry(self, data):
+        data = (np.log(data + 1e-9) + 20.73) / 13.59
+        data = np.nan_to_num(data, nan=0.0)
+        return data
+
+
 class ImageFolder(Dataset):
     def __init__(self, root, 
                  id_list=None,           # string, e.g., '0-9,2-5'
