@@ -12,10 +12,10 @@ class UnconditionalDiffusionSampler(Algo):
         self.diffusion_scheduler_config = diffusion_scheduler_config
         self.sde = sde
 
-    def inference(self, observation, num_samples=1, verbose=True):
+    def inference(self, observation, num_samples=1, conditioning=None, verbose=True):
         device = self.forward_op.device
         diffusion_scheduler = Scheduler(**self.diffusion_scheduler_config)
         xt = torch.randn(observation.shape[0], self.net.img_channels, self.net.img_resolution, self.net.img_resolution, device=device) * diffusion_scheduler.sigma_max
         sampler = DiffusionSampler(diffusion_scheduler)
-        xt = sampler.sample(self.net, xt, SDE=self.sde, verbose=False)
+        xt = sampler.sample(self.net, xt, SDE=self.sde, conditioning=conditioning, verbose=verbose)
         return xt

@@ -19,6 +19,7 @@ class VPPrecond(torch.nn.Module):
     def __init__(self,
         img_resolution,                 # Image resolution.
         img_channels,                   # Number of color channels.
+        cond_channels   = 0,            # Number of conditioning channels.
         label_dim       = 0,            # Number of class labels, 0 = unconditional.
         use_fp16        = False,        # Execute the underlying model at FP16 precision?
         beta_d          = 19.9,         # Extent of the noise level schedule.
@@ -39,9 +40,16 @@ class VPPrecond(torch.nn.Module):
         self.epsilon_t = epsilon_t
         self.sigma_min = float(self.sigma(epsilon_t))
         self.sigma_max = float(self.sigma(1))
-        self.model = _model_dict[model_type](img_resolution=img_resolution, in_channels=img_channels, out_channels=img_channels, label_dim=label_dim, **model_kwargs)
+        self.model = _model_dict[model_type](
+            img_resolution=img_resolution,
+            in_channels=img_channels + cond_channels,
+            out_channels=img_channels,
+            label_dim=label_dim,
+            encoder_type='standard',
+            decoder_type='standard',
+            **model_kwargs)
 
-    def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
+    def forward(self, x, sigma, class_labels=None, conditioning=None, force_fp32=False, **model_kwargs):
         x = x.to(torch.float32)
         sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
         class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
@@ -52,7 +60,13 @@ class VPPrecond(torch.nn.Module):
         c_in = 1 / (sigma ** 2 + 1).sqrt()
         c_noise = (self.M - 1) * self.sigma_inv(sigma)
 
-        F_x = self.model((c_in * x).to(dtype), c_noise.flatten(), class_labels=class_labels, **model_kwargs)
+        x_scaled = (c_in * x).to(dtype)
+        if conditioning is not None:
+            model_input = torch.cat([x_scaled, conditioning.to(dtype)], dim=1)
+        else:
+            model_input = x_scaled
+
+        F_x = self.model(model_input, c_noise.flatten(), class_labels=class_labels, **model_kwargs)
         assert F_x.dtype == dtype
         D_x = c_skip * x + c_out * F_x.to(torch.float32)
         return D_x
@@ -179,6 +193,7 @@ class EDMPrecond(torch.nn.Module):
     def __init__(self,
         img_resolution,                     # Image resolution.
         img_channels,                       # Number of color channels.
+        cond_channels   = 0,                # Number of conditioning channels.
         label_dim       = 0,                # Number of class labels, 0 = unconditional.
         use_fp16        = False,            # Execute the underlying model at FP16 precision?
         sigma_min       = 0,                # Minimum supported noise level.
@@ -195,9 +210,14 @@ class EDMPrecond(torch.nn.Module):
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.sigma_data = sigma_data
-        self.model = _model_dict[model_type](img_resolution=img_resolution, in_channels=img_channels, out_channels=img_channels, label_dim=label_dim, **model_kwargs)
+        self.model = _model_dict[model_type](
+            img_resolution=img_resolution,
+            in_channels=img_channels + cond_channels,
+            out_channels=img_channels,
+            label_dim=label_dim,
+            **model_kwargs)
 
-    def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
+    def forward(self, x, sigma, class_labels=None, conditioning=None, force_fp32=False, **model_kwargs):
         x = x.to(torch.float32)
         sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
         class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
@@ -208,7 +228,13 @@ class EDMPrecond(torch.nn.Module):
         c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
         c_noise = sigma.log() / 4
 
-        F_x = self.model((c_in * x).to(dtype), c_noise.flatten(), class_labels=class_labels, **model_kwargs)
+        x_scaled = (c_in * x).to(dtype)
+        if conditioning is not None:
+            model_input = torch.cat([x_scaled, conditioning.to(dtype)], dim=1)
+        else:
+            model_input = x_scaled
+
+        F_x = self.model(model_input, c_noise.flatten(), class_labels=class_labels, **model_kwargs)
         assert F_x.dtype == dtype
         D_x = c_skip * x + c_out * F_x.to(torch.float32)
         return D_x

@@ -16,13 +16,13 @@ class VPLoss:
         self.beta_min = beta_min
         self.epsilon_t = epsilon_t
 
-    def __call__(self, net, images, labels=None, augment_pipe=None):
+    def __call__(self, net, images, labels=None, augment_pipe=None, conditioning=None):
         rnd_uniform = torch.rand([images.shape[0], 1, 1, 1], device=images.device)
         sigma = self.sigma(1 + rnd_uniform * (self.epsilon_t - 1))
         weight = 1 / sigma ** 2
         y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)
         n = torch.randn_like(y) * sigma
-        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
+        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels, conditioning=conditioning)
         loss = weight * ((D_yn - y) ** 2)
         return loss
 
@@ -60,15 +60,35 @@ class EDMLoss:
         self.P_std = P_std
         self.sigma_data = sigma_data
 
-    def __call__(self, net, images, labels=None, augment_pipe=None):
+    def __call__(self, net, images, labels=None, augment_pipe=None, conditioning=None):
         rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
         weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
         y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)
         n = torch.randn_like(y) * sigma
-        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
+        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels, conditioning=conditioning)
         loss = weight * ((D_yn - y) ** 2)
         return loss
+
+
+class EDMLossJacobian:
+    def __init__(self, P_mean=-1.2, P_std=1.2, sigma_data=0.5):
+        self.P_mean = P_mean
+        self.P_std = P_std
+        self.sigma_data = sigma_data
+
+    def __call__(self, net, images, labels=None, augment_pipe=None, conditioning=None):
+        rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+        weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
+        y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)
+        n = torch.randn_like(y) * sigma
+        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels, conditioning=conditioning)
+        jacobian = 1 + 20.0 * torch.exp(y * 7.25 - 5.3)
+        jacobian = torch.clamp(jacobian, max=25)
+        loss = weight * jacobian * ((D_yn - y) ** 2)
+        return loss
+
 
 #----------------------------------------------------------------------------
 
@@ -127,3 +147,68 @@ class MRILoss:
         else:
             target = data['mvue'].type(torch.complex128).abs()
         return self.loss(recon, target)
+    
+
+class RelativePowerSpectrumSimilarityLoss:
+    def __call__(self, yhat, y):
+        def compute_power_spectrum(img, boxsize=6.25):
+            '''
+            Args:
+                - img (torch.Tensor): Input field of size (Npixels x Npixels).
+                - boxsize (float): Size of the simulation box in physical units.
+
+            Returns:
+                - k (torch.Tensor): Wavenumbers.
+                - P (torch.Tensor): Power spectrum values.
+                - N (torch.Tensor): Number of samples in each bin.
+            '''
+            N = img.shape[0]
+
+            ks = []
+            Ps = []
+            Ns = []
+            for i in range(N):
+                img_i = img[i, 0].squeeze()  # Shape: (Npixels, Npixels)
+                fft_field = torch.fft.rfft2(img_i)
+
+                # Compute power spectrum
+                power_spectrum = torch.abs(fft_field * torch.conj(fft_field))
+
+                # Compute radial wavenumbers
+                nx, ny = img_i.shape[-2:]
+                lx = torch.fft.fftfreq(nx, d=boxsize / nx)
+                ly = torch.fft.rfftfreq(ny, d=boxsize / ny)
+                kx, ky = torch.meshgrid(lx, ly, indexing='ij')
+                radial_wavenumbers = torch.sqrt(kx**2 + ky**2)
+
+                # Radial binning
+                k_bins = torch.arange(
+                    0, radial_wavenumbers.max(), 2 * torch.pi / boxsize)
+                k_bin_indices = torch.bucketize(
+                    radial_wavenumbers.flatten(), k_bins)
+                power_spectrum_flat = power_spectrum.flatten()
+
+                P = torch.zeros(len(k_bins) - 1)
+                N = torch.zeros(len(k_bins) - 1)
+                for i in range(1, len(k_bins)):
+                    mask = k_bin_indices == i
+                    P[i - 1] = power_spectrum_flat[mask].mean()
+                    N[i - 1] = mask.sum()
+
+                # Wavenumber centers
+                k_centers = 0.5 * (k_bins[:-1] + k_bins[1:])
+
+                ks.append(k_centers)
+                Ps.append(P)
+                Ns.append(N)
+
+            ks = torch.stack(ks, dim=0)
+            Ps = torch.stack(Ps, dim=0)
+            Ns = torch.stack(Ns, dim=0)
+            return ks, Ps, Ns
+
+        _, phat, __ = compute_power_spectrum(yhat)
+        _, p, __ = compute_power_spectrum(y)
+
+        # power spectrum similarity
+        return (torch.abs(phat - p) / (p + 1e-8)).mean()

@@ -30,7 +30,7 @@ class BaseOperator(ABC):
         # add noise
         return out + self.sigma_noise * torch.randn_like(out)
 
-    def gradient(self, pred, observation, return_loss=False):
+    def gradient(self, pred, observation, return_loss=False, **kwargs):
         """
             Use torch.autograd to compute gradient w.r.t. predicted parameters, 
                 i.e., \nabla_{pred} loss(pred, observation). 
@@ -44,7 +44,7 @@ class BaseOperator(ABC):
             - loss (torch.tensor): loss value, shape (batch_size, ) if return_loss is True
         """
         pred_tmp = pred.clone().detach().requires_grad_(True)
-        loss = self.loss(pred_tmp, observation).sum()
+        loss = self.loss(pred_tmp, observation, **kwargs).sum()
         pred_grad = grad(loss, pred_tmp)[0]
         if return_loss:
             return pred_grad, loss
