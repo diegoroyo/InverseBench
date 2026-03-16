@@ -1,0 +1,48 @@
+program: main.py
+project: GL
+name: grav-lensing-darkclusters-dapsll
+method: bayes
+metric:
+  goal: maximize
+  name: psnr
+
+parameters:
+  algorithm.method.lgvd_config.lr:
+    distribution: log_uniform_values
+    max: 0.001     #1e-3
+    min: 0.0000001 #1e-7
+
+  algorithm.method.lgvd_config.tau:
+    distribution: log_uniform_values
+    max: 0.01    #1e-2
+    min: 0.00001 #1e-5
+
+  algorithm.method.ll_learning_rate:
+    distribution: log_uniform_values
+    max: 0.1    
+    min: 0.001
+
+  algorithm.method.ll_tv_regularization_weight:
+    distribution: log_uniform_values
+    max: 1.0   
+    min: 0.0001
+
+  problem.model.loss_factor_weak:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.1
+    
+  problem.model.loss_factor_strong:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 10.0
+
+# remember to change the problem file, don't use the test samples
+command:
+  - python
+  - ${program}
+  - problem=grav-lensing-weak+strong+photo-darkclusters-conditioning-snap67
+  - algorithm=daps_ll
+  - pretrain=grav-lensing-darkclusters-conditioning-fov225
+  - wandb=True
+  - ${args_no_hyphens}

@@ -1,0 +1,44 @@
+data:
+  _target_: training.dataset.DarkClustersDataset
+  root_mass: ../data/darkclusters-train-tng[300snap67]-fov[225]-mass[dm+baryon].npy
+  root_photometry: ../data/darkclusters-train-tng[300snap67]-fov[225]-photo[HST].npy
+  resolution: 512
+
+model:
+  _target_: models.precond.EDMPrecond
+  model_type: DhariwalUNet
+  img_resolution: 512
+  img_channels: 1
+  cond_channels: 3
+  label_dim: 0
+  sigma_data: 0.5
+  model_channels: 128
+  channel_mult: [1, 1, 2, 2, 4, 4]
+  attn_resolutions: [32, 16]
+  num_blocks: 2
+  dropout: 0.13
+
+loss:
+  _target_: training.loss.EDMLossJacobian
+
+train:
+  lr: 0.0001
+  batch_size: 1
+  num_steps: 2_000_001
+  warmup_steps: 500
+  ema_decay: 0.9999
+  grad_clip: 0.0
+  ema_halflife_nimg: 209600
+  ema_rampup_ratio: 0.05
+  tf32: True
+  resume: None
+  num_workers: 4
+
+log:
+  exp_dir: 'exps/pretrain'
+  exp_name: gravlensing-darkclusters-conditioning-fov225-pretrain
+  wandb: False
+  project: 'gravlensing-darkclusters-conditioning-fov225-prior'
+  group: 'training'
+  log_every: 50
+  save_every: 20_000
